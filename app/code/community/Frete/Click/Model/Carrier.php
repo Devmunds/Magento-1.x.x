@@ -22,7 +22,9 @@ class Frete_Click_Model_Carrier extends Frete_Click_Model_Abstract
      */
     public function getAllowedMethods()
     {
-        return $this->_allowedMethods;
+        return array(
+            'freteclick' => $this->getConfigData('name'),
+          );;    
     }
     
     /**
@@ -53,12 +55,27 @@ class Frete_Click_Model_Carrier extends Frete_Click_Model_Abstract
      */
     public function collectRates(Mage_Shipping_Model_Rate_Request $request)
     {
-        Mage::log('Frete_Click_Model_Carrier::collectRates');
-        $this->_rawRequest = $request;
-        $this->_result = $this->_getQuotes();
-        $this->_updateFreeMethodQuote($request);
+        $result = Mage::getModel('shipping/rate_result');
 
-        return $this->_result;
+        $array_resp = json_decode($this->_calculate_shipping());
+
+        foreach($array_resp->response->data->order->quotes as $key => $quote){
+    
+            $quote = ( array ) $quote;
+
+            $rate = Mage::getModel('shipping/rate_result_method');
+            
+            $rate->setCarrier($this->_code);
+            $rate->setCarrierTitle($this->getConfigData('title'));
+            $rate->setMethod($quote['carrier']->alias);
+            $rate->setMethodTitle($this->getMethodTitle($quote));
+            $rate->setPrice($quote['total']);
+            $rate->setCost(0);
+
+            $result->append($rate);
+        }
+
+        return $result;
     }
 
     protected function _setFreeMethodRequest($freeMethod)
@@ -109,46 +126,5 @@ class Frete_Click_Model_Carrier extends Frete_Click_Model_Abstract
 
             $this->_result = $singleResult;
         }
-    }
-
-    /**
-     * (non-PHPdoc)
-     * @see Mage_Shipping_Model_Carrier_Abstract::_getQuotes()
-     */
-    protected function _getQuotes()
-    {
-        Mage::log('Frete_Click_Model_Carrier::_getQuotes');
-        $rateResult = Mage::getModel('shipping/rate_result');
-        $quotes = $this->getQuotes($this->_rawRequest);
-
-        foreach ($quotes as $quote) {
-            if (empty($quote->getPrice())) {
-                Mage::log('Empty price for ' . $quote->getMethod());
-                continue;
-            }
-            if (!$quote->hasError()) {
-                $method = Mage::getModel('shipping/rate_result_method');
-                $method->setCarrier($this->getCarrierCode());
-                $method->setCarrierTitle($this->getConfigData('title'));
-                $method->setMethod($quote->getMethod());
-                $method->setMethodTitle($this->getMethodTitle($quote));
-                $method->setPrice($this->getMethodPrice($quote->getPrice(), $quote->getMethod()));
-                $method->setCost($quote->getPrice());
-            } else {
-                Mage::logException(Mage::exception('Mage_Core', $quote->getError()));
-                $method = Mage::getModel('shipping/rate_result_error');
-                $method->setCarrier($this->getCarrierCode());
-                $method->setErrorMessage($this->getConfigData('specificerrmsg'));
-                $method->setErrorMessage($quote->getError());
-            }
-
-            if ($quote->getQuoteId()) {
-                $this->_getSession()->setFreteClickOrderId($quote->getQuoteId());
-            }
-            
-            $rateResult->append($method);
-        }
-        
-        return $rateResult;
     }
 }

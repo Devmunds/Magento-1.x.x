@@ -1,4 +1,14 @@
 <?php
+
+require_once ('vendor/autoload.php');
+
+use SDK\SDK;
+use SDK\Models\QuoteRequest;
+use SDK\Models\Package;
+use SDK\Models\Origin;
+use SDK\Models\Destination;
+use SDK\Models\Config;
+
 abstract class Frete_Click_Model_Abstract extends Mage_Shipping_Model_Carrier_Abstract
 {
     const DEFAULT_API_ORDER = 'order';
@@ -117,13 +127,15 @@ abstract class Frete_Click_Model_Abstract extends Mage_Shipping_Model_Carrier_Ab
         return Mage::helper('freteclick')->__('Mixed');
     }
 
+    // This function get product pakage
     protected function _getProductPackage()
     {
         $package = array();
         $sizeFactor = (float)$this->getConfigData('size_factor');
-        $weightFactor = (float)$this->getConfigData('weight_factor');
+        //$weightFactor = (float)$this->getConfigData('weight_factor');
+        $cart = Mage::getModel('checkout/cart')->getQuote();
 
-        foreach ($this->getItems() as $item) {
+        foreach ($cart->getAllVisibleItems() as $item) {
             $totalQty = is_numeric($item->getTotalQty()) ? $item->getTotalQty() : $item->getQty();
 
             if ($this->_isFreeRequest && ($freeQty = (int)$item->getFreeShipping())) {
@@ -138,23 +150,20 @@ abstract class Frete_Click_Model_Abstract extends Mage_Shipping_Model_Carrier_Ab
 
             if ($_product = $item->getProduct()) {
                 $_product->load($_product->getId());
-                $height = $this->_getProductAttribute($_product, $this->getConfigData('attribute_height'));
-                $width = $this->_getProductAttribute($_product, $this->getConfigData('attribute_width'));
-                $depth = $this->_getProductAttribute($_product, $this->getConfigData('attribute_length'));
-                $height*= $sizeFactor;
-                $width *= $sizeFactor;
-                $depth *= $sizeFactor;
-                $weigth = $item->getWeight() * $weightFactor;
+                $height = $this->_getProductAttribute($_product, $this->getConfigData('attribute_height')) / $sizeFactor;
+                $width = $this->_getProductAttribute($_product, $this->getConfigData('attribute_width')) / $sizeFactor;
+                $depth = $this->_getProductAttribute($_product, $this->getConfigData('attribute_length')) / $sizeFactor;
+                $weigth = $item->getWeight();
                 $package[] = array(
                     'qtd'       => $totalQty,
-                    'weight'    => Mage::helper('freteclick')->formatAmount($weigth, 2, ',', ''),
-                    'height'    => Mage::helper('freteclick')->formatAmount($height, 2, ',', ''),
-                    'width'     => Mage::helper('freteclick')->formatAmount($width, 2, ',', ''),
-                    'depth'     => Mage::helper('freteclick')->formatAmount($depth, 2, ',', '')
+                    'weight'    => Mage::helper('freteclick')->formatAmount($weigth),
+                    'height'    => Mage::helper('freteclick')->formatAmount($height),
+                    'width'     => Mage::helper('freteclick')->formatAmount($width),
+                    'depth'     => Mage::helper('freteclick')->formatAmount($depth),
+                    'price'     => $_product->getPrice() * $totalQty
                 );
             }
         }
-
         return $package;
     }
 
@@ -224,15 +233,15 @@ abstract class Frete_Click_Model_Abstract extends Mage_Shipping_Model_Carrier_Ab
     protected function _getStoreRegion()
     {
         $regionId = Mage::getStoreConfig('shipping/origin/region_id', $this->getStore());
-        $region = Mage::getModel('directory/region')->load($regionId)->getName();
-        return $region;
+        //$regionName = Mage::getModel('directory/region')->load($regionId)->getName();
+        return $regionId;        
     }
 
     protected function _getStoreCountry()
     {
         $countryId = Mage::getStoreConfig('shipping/origin/country_id', $this->getStore());
-        $country = Mage::getModel('directory/country')->load($countryId)->getName();
-        return $country;
+        $countryName = Mage::getModel('directory/country')->load($countryId)->getName();
+        return $countryName;
     }
 
     protected function _getStoreStreetNumber()
@@ -283,6 +292,7 @@ abstract class Frete_Click_Model_Abstract extends Mage_Shipping_Model_Carrier_Ab
         return $this->_crossdocking;
     }
 
+    // This function get collection filter
     protected function _getCollectionFilter(Varien_Data_Collection $collection)
     {
         if ($collection->count() > 0 && $this->getConfigFlag('fast_and_cheap_filter')) {
@@ -353,90 +363,75 @@ abstract class Frete_Click_Model_Abstract extends Mage_Shipping_Model_Carrier_Ab
         return true;
     }
     
+    //this function calculate shipping
+    protected function _calculate_shipping(){
+
+        $quote_request = new QuoteRequest();
+
+        $config = new Config();
+        $config->setQuoteType('full');
+        $config->setOrder('total');
+        
+        $quote_request->setConfig($config);
+  
+        //Set Origen
+        $origin = new Origin();  
+        $origin->setCEP($this->_getStorePostcode());
+        $origin->setStreet($this->_getStoreStreet());
+        $origin->setNumber($this->_getStoreStreetNumber());
+        $origin->setComplement($this->_getStoreAdditionalInfo());
+        $origin->setDistrict($this->_getStoreDistrict());
+        $origin->setCity($this->_getStoreCity());
+        $origin->setState($this->_getStoreRegion());
+        $origin->setCountry($this->_getStoreCountry()); 
+        $quote_request->setOrigin($origin);
+
+        //Set Detination       
+        if(!empty( $address = $this->getDestAddress())){
+            $destination = new Destination(); 
+            $destination->setCEP( $address->getPostcode());
+            $destination->setStreet($address->getStreet());
+            $destination->setNumber( $address->getNumber());
+            $destination->setComplement($address->getAdditionalInfo());
+            $destination->setDistrict($address->getDistrict());
+            $destination->setCity( $address->getCity());
+            $destination->setState($address->getRegion());
+            $destination->setCountry($address->getCountry()); 
+            $quote_request->setDestination($destination); 
+        }
+         
+        if(!empty($this->_getProductPackage())){
+            foreach($this->_getProductPackage() as $item){
+
+                $package = new Package();
+                $package->setQuantity($item['qtd']);
+                $package->setWeight($item['weight']);
+                $package->setHeight($item['height']);
+                $package->setWidth($item['width']);
+                $package->setDepth($item['depth']);
+                $package->setProductType($this->_getMainCategory());
+                $package->setProductPrice($item['price']);
+                $quote_request->addPackage($package);
+               
+            }
+        }
+        
+        $SDK = new SDK($this->getConfigData('api_key'));
+        $cotafacil = $SDK->cotaFacilClient();			
+        $array_resp = $cotafacil::quote($quote_request);	
+    
+        return $array_resp;
+    }
+
+
+
+    //This function format title methods
     public function getMethodTitle($item)
     {
-        $name = $item->getCarrierAlias();
-        $companyTime = $item->getDeadline();
+        $name = $item['carrier']->alias;
+        $companyTime = intval($item['retrieveDeadline']) + intval($item['deliveryDeadline']);
         $finalTime = $companyTime + $this->_getCrossdocking() + (int)$this->getConfigData('crossdocking');
         return Mage::helper('freteclick')->__('%s - %d days', $name, $finalTime);
     }
 
-    /**
-     * @return Varien_Http_Client
-     */
-    public function getClientRequest()
-    {
-        if ($client = Mage::getModel('freteclick/client', $this->getConfigData('api_quote_url'))) {
-            // Store account information
-            $client->setParameterPost(array(
-                'api-key'   => $this->getConfigData('api_key'),
-                'order'     => 'total',
-                'name'      => $this->_getStoreName(),
-                'phone'     => $this->_getStorePhone(),
-                'email'     => $this->_getStoreEmail()
-            ));
-
-            // Store address information
-            $client->setParameterPost(array(
-                'cep-origin'            => $this->_getStorePostcode(),
-                'street-origin'         => $this->_getStoreStreet(),
-                'address-number-origin' => $this->_getStoreStreetNumber(),
-                'complement-origin'     => $this->_getStoreAdditionalInfo(),
-                'district-origin'       => $this->_getStoreDistrict(),
-                'city-origin'           => $this->_getStoreCity(),
-                'state-origin'          => $this->_getStoreRegion(),
-                'country-origin'        => $this->_getStoreCountry()
-            ));
-        }
-
-        return $client;
-    }
-
-    /**
-     * 
-     * @return Varien_Data_Collection
-     */
-    public function getQuotes(Mage_Shipping_Model_Rate_Request $request)
-    {
-        Mage::log('Frete_Click_Model_Abstract::getQuotes');
-        $collection = new Varien_Data_Collection();
-        $this->setItems($this->_getRequestItems($request));
-        
-        if ($client = $this->getClientRequest()) {
-            $productPack = $this->_getProductPackage();
-            if (!empty($productPack)) {
-                // Product Cart information
-                $client->setParameterPost(array(
-                    'product-type' => $this->_getMainCategory(),
-                    'product-total-price' => Mage::helper('freteclick')->formatAmount($request->getPackageValue()),
-                    'product-package' => $productPack
-                ));
-            }
-
-            $address = $this->getDestAddress();
-            $client->setParameterPost(array(
-                'cep-destination'               => $address->getPostcode(),
-                'street-destination'            => $address->getStreet(),
-                'address-number-destination'    => $address->getNumber(),
-                'complement-destination'        => $address->getAdditionalInfo(),
-                'district-destination'          => $address->getDistrict(),
-                'city-destination'              => $address->getCity(),
-                'state-destination'             => $address->getRegion(),
-                'country-destination'           => $address->getCountry()
-            ));
-
-            $request->setSession($this->_getSession());
-            $quotes = $client->getQuotes($request);
-            if (!empty($quotes)) {
-                foreach ($quotes as $quote) {
-                    $collection->addItem(new Varien_Object($quote));
-                }
-            } else {
-                Mage::log('Empty response');
-            }
-        }
-        
-        $collection = $this->_getCollectionFilter($collection);
-        return $collection;
-    }
 }

@@ -16,6 +16,6 @@ class Frete_Click_Helper_Data extends Mage_Core_Helper_Abstract
 
     public function formatAmount($amount)
     {
-        return number_format($amount, 2, ',', '');
+        return number_format($amount, 2, '.', '');
     }
 }
